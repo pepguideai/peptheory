@@ -51,7 +51,7 @@
   const recommendWater = (mg, doseMg, cap) => {
     if (!(mg > 0) || !(doseMg > 0)) return null;
     let best = null;
-    for (const ml of [0.5, 1, 1.5, 2, 2.5, 3, 4, 5]) {
+    for (const ml of [0.5, 1, 1.5, 2, 2.5, 3]) {
       const u = doseMg * ml / mg * 100; let s = 0;
       if (u < 5 || u > cap) s += 100; else if (u < 10) s += 20;
       if (Math.abs(u - Math.round(u)) > 0.01) s += 30; else if (u % 5 !== 0) s += 8;
@@ -70,7 +70,8 @@
     const inInputs = step < 4 && !isHome && !isIntro, inResult = step === 4;
     const isSavedDose = step === 5, isSavedDraw = step === 6;
     const mg = parseFloat(st.mg), water = parseFloat(st.water), dose = parseFloat(st.dose);
-    const valid = [mg > 0, true, dose > 0, water > 0];
+    const MAX_WATER = 3.5, waterOver = water > MAX_WATER;
+    const valid = [mg > 0, true, dose > 0, water > 0 && !waterOver];
     const cap = st.syringe === 'U-100' ? 100 : 50;
     const doseMg = st.doseUnit === 'mcg' ? dose / 1000 : dose;
     const rec = recommendWater(mg, doseMg, cap);
@@ -81,6 +82,9 @@
       ? `This puts your ${fmt(dose, 3)} ${st.doseUnit} draw exactly on the ${units(recU)} line. A whole line is the easiest to read.`
       : `Your ${fmt(dose, 3)} ${st.doseUnit} draw lands at ${units(recU)} units. No common amount of water gives a whole line here, so read carefully.`) : '';
     const conc = water > 0 ? mg / water : 0;
+    const recConc = rec && mg > 0 ? mg / rec.ml : 0;
+    const recSmall = !!rec && recU > 0 && recU < 5;
+    const concText = conc > 0 ? `${fmt(conc, 2)} mg/mL` : '';
     const drawUnits = conc > 0 ? doseMg / conc * 100 : 0;
     const waterUnits = water > 0 ? water * 100 : 0;
     const split = (u) => { if (!(u > cap)) return { fulls: 0, rem: u || 0 }; const fulls = Math.floor(u / cap); return { fulls, rem: u - fulls * cap }; };
@@ -118,7 +122,7 @@
     const injectedMl = Array.from({ length: Math.min(st.injected, nInj) }, (_, i) => (i === nInj - 1 && wS.rem >= 0.05 ? wS.rem : cap) / 100).reduce((a, b) => a + b, 0);
     const nextInjUnits = st.injected >= nInj ? 0 : ((st.injected === nInj - 1 && wS.rem >= 0.05) ? wS.rem : cap);
     if (showTracker) steps[1].fill = st.pushing ? 0 : nextInjUnits;
-    return { st, step, isHome, isIntro, inInputs, inResult, isSavedDose, isSavedDraw, mg, water, dose, valid, cap, rec, matchesOpt, recU, recFills, recReason, drawUnits, waterUnits, wS, nInj, dFill, dl, doseWord, overNote, steps, LAST, r, isReady, isTable, cur, tableRows, tableIntro, showTracker, injectedMl, nextInjUnits };
+    return { st, step, isHome, isIntro, inInputs, inResult, waterOver, recConc, recSmall, concText, isSavedDose, isSavedDraw, mg, water, dose, valid, cap, rec, matchesOpt, recU, recFills, recReason, drawUnits, waterUnits, wS, nInj, dFill, dl, doseWord, overNote, steps, LAST, r, isReady, isTable, cur, tableRows, tableIntro, showTracker, injectedMl, nextInjUnits };
   }
 
   // ---- SVG helpers ----
@@ -158,9 +162,9 @@ ${ticks}<text x="20" y="144" fill="var(--n500)" font-size="11" font-weight="600"
   const ICON_DL = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>';
 
   // ---- views ----
-  const numField = (field, value, unit, on) => `<label class="field${on ? ' on' : ''}"><input type="number" inputmode="decimal" placeholder="0" value="${esc(value)}" data-field="${field}" autofocus><span class="unit">${unit}</span></label>`;
+  const numField = (field, value, unit, on) => `<label class="field${on ? ' on' : ''}" data-wrap="${field}"><input type="number" inputmode="decimal" step="any" min="0" placeholder="0" value="${esc(value)}" data-field="${field}" autocomplete="off" enterkeyhint="next" autofocus><span class="unit">${unit}</span></label>`;
   const unitSeg = (st) => `<div class="seg"><button class="${st.doseUnit === 'mg' ? 'on' : ''}" data-act="unit" data-arg="mg">mg <span>milligrams</span></button><button class="${st.doseUnit === 'mcg' ? 'on' : ''}" data-act="unit" data-arg="mcg">mcg <span>micrograms</span></button></div>`;
-  const doseEcho = (m) => m.dose > 0 ? `<p class="echo">You entered ${fmt(m.dose, 3)} ${m.st.doseUnit} — that's ${m.st.doseUnit === 'mg' ? fmt(m.dose * 1000, 3) + ' mcg' : fmt(m.dose / 1000, 6) + ' mg'}.</p>` : '';
+  const doseEcho = (m) => `<p class="echo" data-echo>${m.dose > 0 ? `You entered ${fmt(m.dose, 3)} ${m.st.doseUnit} — that's ${m.st.doseUnit === 'mg' ? fmt(m.dose * 1000, 3) + ' mcg' : fmt(m.dose / 1000, 6) + ' mg'}.` : ''}</p>`;
   const saveBox = (m) => m.st.saved ? `<p class="saved-pill">Saved as “${esc(m.st.savedName)}”. Find it on your home screen.</p>`
     : `<div class="row"><input class="text-input" type="text" placeholder="Compound name" value="${esc(m.st.guideName)}" data-field="guideName"><button class="btn btn-secondary" data-act="save" ${m.st.guideName.trim() ? '' : 'disabled'} style="min-height:52px;padding:0 20px;font-size:16px;font-weight:700">Save</button></div>`;
 
@@ -208,9 +212,9 @@ ${ticks}<text x="20" y="144" fill="var(--n500)" font-size="11" font-weight="600"
     else {
       const recMl = rec ? fmt(rec.ml) : '';
       if (!st.custom && rec) body = `<div class="kicker">Step 4 of 4</div><h1>Add ${recMl} mL of bacteriostatic water.</h1><p class="lead">${m.recReason}</p>
-<div class="rec"><span class="l"><span class="big">${recMl} mL</span><span class="m">${m.recFills}</span></span><span class="r"><span class="u">${units(m.recU)} units</span><span class="m2">per draw</span></span></div>
-<button class="btn btn-ghost" data-act="openCustom" style="align-self:flex-start;font-size:16px">Use a different amount</button>`;
-      else body = `<div class="kicker">Step 4 of 4</div><h1>How much bacteriostatic water will you add?</h1><p class="lead">${rec ? `The recommended amount is ${recMl} mL. Double-check any other amount against your source: a wrong volume changes every dose. Measure carefully and fill to the line, not past it.` : 'Double-check this against your source: a wrong volume changes every dose. Measure carefully. Fill to the line, not past it.'}</p>${numField('water', st.water, 'mL', m.water > 0)}${rec ? `<button class="btn btn-ghost" data-act="useRec" style="align-self:flex-start;font-size:16px">Use the recommended ${recMl} mL</button>` : ''}`;
+<div class="rec"><span class="l"><span class="big">${recMl} mL</span><span class="m">${m.recFills}</span><span class="m">${fmt(m.recConc, 2)} mg/mL</span></span><span class="r"><span class="u">${units(m.recU)} units</span><span class="m2">per draw</span></span></div>
+${m.recSmall ? `<p class="note">At ${units(m.recU)} units this is a small draw and harder to read exactly. Less water would make it even smaller; the alternative is to use a different amount and accept a draw that isn't on a whole line.</p><button class="btn btn-secondary" data-act="openCustom">Use a different amount</button>` : `<button class="btn btn-ghost" data-act="openCustom" style="align-self:flex-start;font-size:16px">Use a different amount</button>`}`;
+      else body = `<div class="kicker">Step 4 of 4</div><h1>How much bacteriostatic water will you add?</h1><p class="lead">${rec ? `The recommended amount is ${recMl} mL. Double-check any other amount against your source: a wrong volume changes every dose. Measure carefully and fill to the line, not past it.` : 'Double-check this against your source: a wrong volume changes every dose. Measure carefully. Fill to the line, not past it.'}</p>${numField('water', st.water, 'mL', m.water > 0)}<p class="echo" data-conc>${m.concText ? `That's ${m.concText}. Your ${fmt(m.dose, 3)} ${st.doseUnit} draw is ${units(m.drawUnits)} units.` : ''}</p><p class="note" data-over style="display:${m.waterOver ? '' : 'none'}">The most you can add is 3.5 mL. Standard vials hold about that much; more risks overfilling.</p>${rec ? `<button class="btn btn-ghost" data-act="useRec" style="align-self:flex-start;font-size:16px">Use the recommended ${recMl} mL</button>` : ''}`;
     }
     return `<div class="col">${body}</div><div class="actions">${step > 0 ? '<button class="btn btn-secondary" data-act="back">Back</button>' : ''}<button class="btn btn-primary grow" data-act="next" ${valid[step] ? '' : 'disabled'}>${step === 3 ? 'Show my steps' : 'Continue'}</button></div>`;
   }
@@ -263,8 +267,6 @@ ${!st.saved ? `<div style="display:flex;flex-direction:column;gap:10px;margin-to
 
   function render() {
     const m = model();
-    const active = document.activeElement, field = active && active.dataset ? active.dataset.field : null;
-    const selEnd = field && active.selectionEnd != null ? active.selectionEnd : null;
     let html = '';
     if (!S.noticeAccepted && !S.legal) html += viewNotice();
     if (S.legal) html += viewLegal();
@@ -276,8 +278,8 @@ ${!st.saved ? `<div style="display:flex;flex-direction:column;gap:10px;margin-to
     else if (m.isSavedDraw) html += viewSavedDraw(m);
     else if (m.inResult) html += viewResult(m);
     app.innerHTML = html;
-    const el = field ? app.querySelector(`[data-field="${field}"]`) : app.querySelector('[autofocus]');
-    if (el) { el.focus({ preventScroll: true }); try { if (selEnd != null && el.type === 'text') el.setSelectionRange(selEnd, selEnd); } catch (e) {} }
+    const el = app.querySelector('[autofocus]');
+    if (el) { el.focus({ preventScroll: true }); try { const n = el.value.length; if (el.type === 'text') el.setSelectionRange(n, n); } catch (e) {} }
   }
 
   function downloadTable(m) {
@@ -335,7 +337,18 @@ ${name ? `<div style="font-size:18px;font-weight:700;color:#3d472b;margin-bottom
     if (t.tagName === 'A') e.preventDefault();
     const fn = ACT[t.dataset.act]; if (fn) fn(t.dataset.arg);
   });
-  app.addEventListener('input', (e) => { const f = e.target.dataset.field; if (f) set({ [f]: e.target.value }); });
+  // Typing never re-renders (that would rebuild the input and reset the caret); patch only what depends on the value.
+  function patchLive() {
+    const m = model();
+    const primary = app.querySelector('[data-act="next"],[data-act="savedNext"]');
+    if (primary) primary.disabled = primary.dataset.act === 'next' ? !m.valid[S.step] : !(m.dose > 0);
+    const saveBtn = app.querySelector('[data-act="save"]'); if (saveBtn) saveBtn.disabled = !S.guideName.trim();
+    const echo = app.querySelector('[data-echo]'); if (echo) echo.textContent = m.dose > 0 ? `You entered ${fmt(m.dose, 3)} ${S.doseUnit} — that's ${S.doseUnit === 'mg' ? fmt(m.dose * 1000, 3) + ' mcg' : fmt(m.dose / 1000, 6) + ' mg'}.` : '';
+    const concEl = app.querySelector('[data-conc]'); if (concEl) concEl.textContent = m.concText ? `That's ${m.concText}. Your ${fmt(m.dose, 3)} ${S.doseUnit} draw is ${units(m.drawUnits)} units.` : '';
+    const over = app.querySelector('[data-over]'); if (over) over.style.display = m.waterOver ? '' : 'none';
+    const wrap = app.querySelector('[data-wrap="water"]'); if (wrap) wrap.classList.toggle('on', m.water > 0);
+  }
+  app.addEventListener('input', (e) => { const f = e.target.dataset.field; if (f) { S[f] = e.target.value; patchLive(); } });
   app.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.dataset.field) { const b = app.querySelector('[data-act="next"],[data-act="savedNext"],[data-act="save"]'); if (b && !b.disabled) b.click(); } });
   render();
 })();
