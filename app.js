@@ -43,7 +43,7 @@
   };
   const lineNote = (u, canEdit) => {
     if (!(u > 0)) return '';
-    if (u < 5) return `Under 5 units is a very small draw and hard to read. More water in the vial would give you a bigger, easier draw.${canEdit ? ' Tap Edit numbers to change it.' : ''}`;
+    if (u < 5) return `Under 5 units is a very small draw and hard to read. More water in the compound vial would give you a bigger, easier draw.${canEdit ? ' Tap Edit numbers to change it.' : ''}`;
     if (!isWhole(u)) return `This doesn't land on a whole line, so it's harder to read exactly.${canEdit ? ' A different amount of water can fix that — tap Edit numbers.' : ''}`;
     return '';
   };
@@ -51,10 +51,13 @@
   const recommendWater = (mg, doseMg, cap) => {
     if (!(mg > 0) || !(doseMg > 0)) return null;
     let best = null;
-    for (const ml of [0.5, 1, 1.5, 2, 2.5, 3]) {
+    // Candidates: common volumes, plus volumes that land a whole-unit draw (snapped to 0.05 mL so the water is measurable).
+    const cands = new Set([0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+    for (let u = 5; u <= cap; u++) { const ml = Math.round(u * mg / (doseMg * 100) * 20) / 20; if (ml >= 0.5 && ml <= 3.5) cands.add(ml); }
+    for (const ml of [...cands].sort((a, b) => a - b)) {
       const u = doseMg * ml / mg * 100; let s = 0;
-      if (u < 5 || u > cap) s += 100; else if (u < 10) s += 20;
-      if (Math.abs(u - Math.round(u)) > 0.01) s += 30; else if (u % 5 !== 0) s += 8;
+      if (u < 5 || u > cap) s += 100; else if (u < 10) s += 20 + (10 - u) * 8; // 5–10 units: closer to 10 wins
+      if (!isWhole(u)) s += 30; else if (Math.round(u) % 5 !== 0) s += 8;
       if (ml * 100 > cap) s += 5;
       if (ml % 1 !== 0) s += 3;
       if (!best || s < best.score || (s === best.score && ml < best.ml)) best = { ml, u, score: s };
@@ -70,13 +73,22 @@
     const inInputs = step < 4 && !isHome && !isIntro, inResult = step === 4;
     const isSavedDose = step === 5, isSavedDraw = step === 6;
     const mg = parseFloat(st.mg), water = parseFloat(st.water), dose = parseFloat(st.dose);
-    const MAX_WATER = 3.5, waterOver = water > MAX_WATER;
+    const MAX_WATER = st.bigVial ? 5 : 3.5, waterOver = water > MAX_WATER;
     const valid = [mg > 0, true, dose > 0, water > 0 && !waterOver];
     const cap = st.syringe === 'U-100' ? 100 : 50;
     const doseMg = st.doseUnit === 'mcg' ? dose / 1000 : dose;
     const rec = recommendWater(mg, doseMg, cap);
     const matchesOpt = !!rec && rec.ml === water;
     const recU = rec ? rec.u : 0;
+    const fillsFor = (ml) => { const wu = ml * 100; if (wu === cap) return `1 full ${st.syringe} syringe`; if (wu > cap) { const f = Math.floor(wu / cap), rem = wu - f * cap; return `${f} full ${st.syringe} syringe${f === 1 ? '' : 's'}${rem > 0.05 ? ' + ' + units(rem) + ' units' : ''}`; } return `${units(wu)} units on a ${st.syringe} syringe`; };
+    // Alternatives when the pick isn't a clean line: a plain 3 mL, and a whole-line volume assuming a larger vial (≤5 mL, water in 5-unit steps).
+    const alts = [];
+    if (rec && (!isWhole(recU) || recU < 10)) {
+      let found = null;
+      for (let u = Math.max(10, Math.ceil(recU)); u <= cap; u++) { const ml = u * mg / (doseMg * 100); if (ml > 5) break; const wu = ml * 100, snap = Math.round(wu / 5) * 5; if (Math.abs(wu - snap) < 0.01) { found = { ml: snap / 100, u }; break; } }
+      if (!found) { const u = Math.max(10, Math.ceil(recU)); const ml = Math.round(u * mg / (doseMg * 100) * 20) / 20; if (ml <= 5 && ml > 0) found = { ml, u: doseMg * ml / mg * 100 }; }
+      if (found && found.ml !== rec.ml && !alts.some(a => a.ml === found.ml)) alts.push({ ...found, big: found.ml > 3.5 });
+    }
     const recFills = (() => { if (!rec) return ''; const wu = rec.ml * 100; if (wu === cap) return `1 full ${st.syringe} syringe`; if (wu > cap) { const f = Math.floor(wu / cap), rem = wu - f * cap; return `${f} full ${st.syringe} syringe${f === 1 ? '' : 's'}${rem > 0.05 ? ' + ' + units(rem) + ' units' : ''}`; } return `${units(wu)} units on a ${st.syringe} syringe`; })();
     const recReason = rec ? (isWhole(recU)
       ? `This puts your ${fmt(dose, 3)} ${st.doseUnit} draw exactly on the ${units(recU)} line. A whole line is the easiest to read.`
@@ -84,6 +96,7 @@
     const conc = water > 0 ? mg / water : 0;
     const recConc = rec && mg > 0 ? mg / rec.ml : 0;
     const recSmall = !!rec && recU > 0 && recU < 5;
+    const recFull = !!rec && rec.ml >= 3;
     const concText = conc > 0 ? `${fmt(conc, 2)} mg/mL` : '';
     const drawUnits = conc > 0 ? doseMg / conc * 100 : 0;
     const waterUnits = water > 0 ? water * 100 : 0;
@@ -96,14 +109,15 @@
     else s1 = `Draw ${cap} units (${fmt(cap / 100)} mL) of bacteriostatic water — a full ${st.syringe} syringe. You'll do this ${nInj} times for ${fmt(water)} mL in total.`;
     const s2 = nInj === 1 ? 'Push the water slowly into your compound vial, aiming the stream at the glass wall rather than the powder.' : 'Push the water slowly into your compound vial, aiming at the glass wall. Tap the button below after each one so you don\u2019t lose count.';
     const dFill = Math.min(drawUnits, cap), dl = lineText(dFill);
+    const u50Tip = st.syringe === 'U-100' && drawUnits > 0 && drawUnits < 10 ? `Small draw. Next time, a U-50 syringe spreads these lines twice as wide, so ${units(drawUnits)} units is easier to read exactly. The number of units stays the same.` : '';
     const doseWord = `${fmt(dose, 3)} ${st.doseUnit}`;
-    const s3 = 'Roll the vial gently between your fingers until the liquid is completely clear with nothing floating in it. Don\u2019t shake it.';
+    const s3 = 'Roll the compound vial gently between your fingers until the liquid is completely clear with nothing floating in it. Don\u2019t shake it.';
     const s4 = `Now that your compound is properly reconstituted, draw ${units(dFill)} units from the compound vial.`;
     const overNote = dS.fulls ? `That's more than one ${st.syringe} syringe holds (${cap} units). It would take ${dS.fulls} full syringe${dS.fulls === 1 ? '' : 's'}${dS.rem > 0 ? ' plus ' + units(dS.rem) + ' units' : ''}.` : '';
-    const drawHow = `Wipe the stopper, turn the vial upside down, and pull the plunger slowly to ${dl}. Check it at eye level; if you see bubbles, tap them to the top, push them back into the vial, and re-draw.`;
+    const drawHow = `Wipe the stopper, turn the compound vial upside down, and pull the plunger slowly to ${dl}. Check it at eye level; if you see bubbles, tap them to the top, push them back into the vial, and re-draw.`;
     const steps = [
       { n: 1, text: s1, short: 'Water drawn into the syringe', fill: Math.min(waterUnits, cap), note: '' },
-      { n: 2, text: s2, short: 'Water injected into the vial', fill: 0, note: '' },
+      { n: 2, text: s2, short: 'Water injected into the compound vial', fill: 0, note: '' },
       { n: 3, text: s3, short: 'Mixed until clear', fill: 0, note: '' },
       { n: 4, text: s4, short: `Drawn to ${dl}`, fill: dFill, note: overNote || lineNote(drawUnits, true), how: drawHow },
     ];
@@ -122,7 +136,7 @@
     const injectedMl = Array.from({ length: Math.min(st.injected, nInj) }, (_, i) => (i === nInj - 1 && wS.rem >= 0.05 ? wS.rem : cap) / 100).reduce((a, b) => a + b, 0);
     const nextInjUnits = st.injected >= nInj ? 0 : ((st.injected === nInj - 1 && wS.rem >= 0.05) ? wS.rem : cap);
     if (showTracker) steps[1].fill = st.pushing ? 0 : nextInjUnits;
-    return { st, step, isHome, isIntro, inInputs, inResult, waterOver, recConc, recSmall, concText, isSavedDose, isSavedDraw, mg, water, dose, valid, cap, rec, matchesOpt, recU, recFills, recReason, drawUnits, waterUnits, wS, nInj, dFill, dl, doseWord, overNote, steps, LAST, r, isReady, isTable, cur, tableRows, tableIntro, showTracker, injectedMl, nextInjUnits };
+    return { st, step, isHome, isIntro, inInputs, inResult, waterOver, alts, fillsFor, MAX_WATER, recConc, recSmall, recFull, concText, u50Tip, isSavedDose, isSavedDraw, mg, water, dose, valid, cap, rec, matchesOpt, recU, recFills, recReason, drawUnits, waterUnits, wS, nInj, dFill, dl, doseWord, overNote, steps, LAST, r, isReady, isTable, cur, tableRows, tableIntro, showTracker, injectedMl, nextInjUnits };
   }
 
   // ---- SVG helpers ----
@@ -145,7 +159,7 @@ ${ticks}<text x="20" y="144" fill="var(--n500)" font-size="11" font-weight="600"
     const { cap, cur, nInj, water, injectedMl, st } = m;
     const vFillH = (cur.fill / cap) * 90, vFillY = 120 - vFillH, vStopY = vFillY - 8, vRodH = Math.max(0, vStopY - 12);
     const frac = nInj === 1 ? 1 : Math.min(1, water > 0 ? injectedMl / water : 0), vLiqH = 6 + frac * 58, vLiqY = 244 - vLiqH;
-    const label = nInj === 1 ? `${fmt(water)} mL going into the vial` : (st.injected >= nInj ? `All ${fmt(water)} mL in the vial` : `${fmt(injectedMl)} of ${fmt(water)} mL in the vial`);
+    const label = nInj === 1 ? `${fmt(water)} mL going into the compound vial` : (st.injected >= nInj ? `All ${fmt(water)} mL in the compound vial` : `${fmt(injectedMl)} of ${fmt(water)} mL in the compound vial`);
     return `<div class="diagram vial"><svg viewBox="0 0 340 250" font-family="Figtree, sans-serif">
 <rect x="150" y="6" width="40" height="8" rx="4" fill="var(--n400)"/><rect class="anim" x="166" y="12" width="8" height="${vRodH}" rx="3" fill="var(--n400)"/>
 <rect class="anim" x="153" y="${vStopY}" width="34" height="8" rx="3" fill="var(--n600)"/><rect class="anim" x="153" y="${vFillY}" width="34" height="${vFillH}" fill="var(--a300)"/>
@@ -153,7 +167,7 @@ ${ticks}<text x="20" y="144" fill="var(--n500)" font-size="11" font-weight="600"
 <rect x="145" y="148" width="50" height="14" rx="4" fill="var(--n600)"/><rect x="155" y="160" width="30" height="16" fill="none" stroke="var(--n700)" stroke-width="3"/>
 <rect class="anim" x="134" y="${vLiqY}" width="72" height="${vLiqH}" fill="var(--a300)"/><rect x="134" y="174" width="72" height="70" rx="10" fill="none" stroke="var(--n700)" stroke-width="3"/>
 <path d="M170 176 C 172 190, 190 194, 200 206" fill="none" stroke="var(--accent)" stroke-width="3" stroke-linecap="round" stroke-dasharray="4 5"/>
-<text x="216" y="192" fill="var(--n500)" font-size="11" font-weight="600">aim at the wall</text><text x="40" y="70" fill="var(--n500)" font-size="11" font-weight="600" text-anchor="middle">syringe</text><text x="40" y="215" fill="var(--n500)" font-size="11" font-weight="600" text-anchor="middle">vial</text></svg>
+<text x="216" y="192" fill="var(--n500)" font-size="11" font-weight="600">aim at the wall</text><text x="40" y="70" fill="var(--n500)" font-size="11" font-weight="600" text-anchor="middle">syringe</text><text x="40" y="215" fill="var(--n500)" font-size="11" font-weight="600" text-anchor="middle">compound vial</text></svg>
 <div class="cap">${label}</div></div>`;
   };
   const barrelSVG = (cap) => { let t = ''; for (let i = 0; i <= 10; i++) { const x = 6 + i * 22, M = i % 2 === 0; t += `<line x1="${x}" y1="36" x2="${x}" y2="${M ? 45 : 41}" stroke="var(--n600)" stroke-width="${M ? 2 : 1.2}" stroke-linecap="round"/>`; if (M) t += `<text x="${x}" y="57" text-anchor="middle" fill="var(--n700)" font-size="10" font-weight="600">${cap / 10 * i}</text>`; } return `<svg viewBox="0 0 260 60" font-family="Figtree, sans-serif"><rect x="6" y="14" width="220" height="22" rx="6" fill="var(--n100)" stroke="var(--n700)" stroke-width="2.5"/><rect x="226" y="21" width="10" height="8" rx="2" fill="var(--n600)"/><rect x="236" y="23.5" width="14" height="3" rx="1.5" fill="var(--n600)"/>${t}</svg>`; };
@@ -212,9 +226,9 @@ ${ticks}<text x="20" y="144" fill="var(--n500)" font-size="11" font-weight="600"
     else {
       const recMl = rec ? fmt(rec.ml) : '';
       if (!st.custom && rec) body = `<div class="kicker">Step 4 of 4</div><h1>Add ${recMl} mL of bacteriostatic water.</h1><p class="lead">${m.recReason}</p>
-<div class="rec"><span class="l"><span class="big">${recMl} mL</span><span class="m">${m.recFills}</span><span class="m">${fmt(m.recConc, 2)} mg/mL</span></span><span class="r"><span class="u">${units(m.recU)} units</span><span class="m2">per draw</span></span></div>
-${m.recSmall ? `<p class="note">At ${units(m.recU)} units this is a small draw and harder to read exactly. Less water would make it even smaller; the alternative is to use a different amount and accept a draw that isn't on a whole line.</p><button class="btn btn-secondary" data-act="openCustom">Use a different amount</button>` : `<button class="btn btn-ghost" data-act="openCustom" style="align-self:flex-start;font-size:16px">Use a different amount</button>`}`;
-      else body = `<div class="kicker">Step 4 of 4</div><h1>How much bacteriostatic water will you add?</h1><p class="lead">${rec ? `The recommended amount is ${recMl} mL. Double-check any other amount against your source: a wrong volume changes every dose. Measure carefully and fill to the line, not past it.` : 'Double-check this against your source: a wrong volume changes every dose. Measure carefully. Fill to the line, not past it.'}</p>${numField('water', st.water, 'mL', m.water > 0)}<p class="echo" data-conc>${m.concText ? `That's ${m.concText}. Your ${fmt(m.dose, 3)} ${st.doseUnit} draw is ${units(m.drawUnits)} units.` : ''}</p><p class="note" data-over style="display:${m.waterOver ? '' : 'none'}">The most you can add is 3.5 mL. Standard vials hold about that much; more risks overfilling.</p>${rec ? `<button class="btn btn-ghost" data-act="useRec" style="align-self:flex-start;font-size:16px">Use the recommended ${recMl} mL</button>` : ''}`;
+<div class="rec"><span class="l"><span class="kicker sage" style="font-size:12px">Recommended</span><span class="big">${recMl} mL</span><span class="m">${m.recFills}</span><span class="m">${fmt(m.recConc, 2)} mg/mL</span></span><span class="r"><span class="u">${units(m.recU)} units</span><span class="m2">per draw</span></span></div>
+${m.recFull ? `<p class="note">Depending on your vial size, this may fill it close to its limit. Check there’s room; fill slowly and stop if the liquid nears the top.</p>` : ''}${m.alts.length ? `<div class="kicker sage" style="margin-top:4px">Other options</div>${m.alts.map((a, i) => `<button class="choice" data-act="pickAlt" data-arg="${i}" style="padding:16px 20px;gap:4px"><span class="head"><b style="font-size:24px">${fmt(a.ml)} mL</b><span style="color:var(--a700);font-weight:700">${units(a.u)} units</span></span><span class="small">${m.fillsFor(a.ml)} · ${fmt(m.mg / a.ml, 2)} mg/mL${a.big ? `<br><b>Have a larger vial? This puts your draw on the ${units(a.u)} line, a rounder number that's easier to read. Needs a vial that holds at least ${fmt(a.ml)} mL.</b>` : ''}</span></button>`).join('')}` : ''}${m.recSmall ? `<p class="note">At ${units(m.recU)} units this is a small draw and harder to read exactly. Less water would make it even smaller; the alternative is to use a different amount and accept a draw that isn't on a whole line.</p><button class="btn btn-secondary" data-act="openCustom">Use a different amount</button>` : `<button class="btn btn-ghost" data-act="openCustom" style="align-self:flex-start;font-size:16px">Use a different amount</button>`}`;
+      else body = `<div class="kicker">Step 4 of 4</div><h1>How much bacteriostatic water will you add?</h1><p class="lead">${rec ? `The recommended amount is ${recMl} mL. Double-check any other amount against your source: a wrong volume changes every dose. Measure carefully and fill to the line, not past it.` : 'Double-check this against your source: a wrong volume changes every dose. Measure carefully. Fill to the line, not past it.'}</p>${numField('water', st.water, 'mL', m.water > 0)}<p class="echo" data-conc>${m.concText ? `That's ${m.concText}. Your ${fmt(m.dose, 3)} ${st.doseUnit} draw is ${units(m.drawUnits)} units.` : ''}</p><p class="note" data-over style="display:${m.waterOver ? '' : 'none'}">The most you can add is ${m.MAX_WATER} mL. ${m.MAX_WATER > 3.5 ? 'Even a large vial fills up around there.' : 'Standard vials hold about that much; more risks overfilling.'}</p>${rec ? `<button class="btn btn-ghost" data-act="useRec" style="align-self:flex-start;font-size:16px">Use the recommended ${recMl} mL</button>` : ''}`;
     }
     return `<div class="col">${body}</div><div class="actions">${step > 0 ? '<button class="btn btn-secondary" data-act="back">Back</button>' : ''}<button class="btn btn-primary grow" data-act="next" ${valid[step] ? '' : 'disabled'}>${step === 3 ? 'Show my steps' : 'Continue'}</button></div>`;
   }
@@ -226,10 +240,10 @@ ${m.recSmall ? `<p class="note">At ${units(m.recU)} units this is a small draw a
   function viewSavedDraw(m) {
     const { st } = m, note = m.overNote || lineNote(m.drawUnits, false);
     return `<div class="col"><h1 class="sage" style="font-size:30px;line-height:1.1">${esc(st.guideName)}</h1><p class="sub">${fmt(m.mg)} mg in ${fmt(m.water)} mL · ${st.syringe} syringe</p>
-<p class="step-text">Using a ${st.syringe} syringe, draw ${units(m.dFill)} units: turn the vial upside down and pull the plunger slowly to ${m.dl}. That's ${m.doseWord}.</p>
+<p class="step-text">Using a ${st.syringe} syringe, draw ${units(m.dFill)} units: turn the compound vial upside down and pull the plunger slowly to ${m.dl}. That's ${m.doseWord}.</p>
 <p class="lead" style="font-size:16px">Then hold the syringe at eye level. If you see bubbles, tap the barrel so they rise, push them back into the vial, and re-draw to the line.</p>
-${note ? `<p class="note">${note}</p>` : ''}${syringeSVG(m, true)}
-<div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-ghost" data-act="savedBack" style="font-size:16px">Change amount</button><button class="btn btn-ghost" data-act="goTable" style="font-size:16px">Units per draw table</button></div></div>
+${note ? `<p class="note">${note}</p>` : ''}${m.u50Tip ? `<p class="note" style="color:var(--s800);background:var(--s100)">${m.u50Tip}</p>` : ''}${syringeSVG(m, true)}
+<div style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn btn-ghost" data-act="savedBack" style="font-size:16px">Change draw</button><button class="btn btn-ghost" data-act="goTable" style="font-size:16px">Units per draw table</button></div></div>
 <p class="verify">Math only. Verify before use.</p>
 <div class="row"><button class="btn btn-primary grow" data-act="restart">Done</button></div>`;
   }
@@ -238,7 +252,7 @@ ${note ? `<p class="note">${note}</p>` : ''}${syringeSVG(m, true)}
     const kicker = isReady ? 'All done' : isTable ? 'Reference' : `Step ${Math.min(r, LAST) + 1} of 4`;
     let body = `<div class="bar"><div class="kicker">${kicker}</div>${!isTable && !isReady ? '<button class="btn btn-ghost sm" data-act="editNumbers">Edit numbers</button>' : ''}</div>`;
     if (!isTable && !isReady && r > 0) body += `<div class="done">${steps.slice(0, r).map(s => `<div><span>${s.n}</span><span>${s.short}</span></div>`).join('')}</div>`;
-    if (isReady) body += `<div class="ready"><div class="check">${ICON_CHECK}</div><h1 style="font-size:34px;line-height:1.1">You're all set.</h1><p class="draw">${units(m.dFill)} units on your ${st.syringe} syringe = ${m.doseWord}.</p><p class="lead" style="font-size:16px">${fmt(m.mg)} mg in ${fmt(m.water)} mL. Every future ${m.doseWord} draw is ${m.dl}.</p><p class="well">Prepared carefully. Well done.</p></div>
+    if (isReady) body += `<div class="ready"><div class="check">${ICON_CHECK}</div><h1 style="font-size:34px;line-height:1.1">You're all set.</h1><p class="draw">${units(m.dFill)} units on your ${st.syringe} syringe = ${m.doseWord}.</p><p class="lead" style="font-size:16px">${fmt(m.mg)} mg in ${fmt(m.water)} mL. Every future ${m.doseWord} draw is ${m.dl}.</p><p class="well">Prepared carefully. Well done.</p>${m.u50Tip ? `<p class="note" style="color:var(--s800);background:var(--s100)">${m.u50Tip}</p>` : ''}</div>
 <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px"><div class="kicker sage">Save this compound</div>${saveBox(m)}</div>`;
     else if (isTable) body += `${st.saved && st.guideName.trim() ? `<div style="font-size:18px;font-weight:700;color:var(--s800)">${esc(st.guideName)}</div>` : ''}<h1 style="font-size:30px">Units per draw</h1><p class="lead" style="font-size:16px">${m.tableIntro}</p>
 <div class="table">${m.tableRows.map(row => `<div class="tr${row.base ? ' base' : ''}"><span class="v">${row.units} <small>units</small></span><span class="eq">=</span><span class="v r">${row.amount} <small>${st.doseUnit}</small></span></div>`).join('')}</div>
@@ -302,7 +316,7 @@ ${name ? `<div style="font-size:18px;font-weight:700;color:#3d472b;margin-bottom
   }
 
   // ---- actions ----
-  const reset = () => ({ mg: '', water: '', dose: '', doseUnit: 'mg', custom: false, guideName: '', savedName: '', saved: false, injected: 0, pushing: false, rstep: 0 });
+  const reset = () => ({ mg: '', water: '', dose: '', doseUnit: 'mg', custom: false, bigVial: false, guideName: '', savedName: '', saved: false, injected: 0, pushing: false, rstep: 0 });
   const openGuide = (g, patch) => set({ mg: String(g.mg), water: String(g.water), dose: g.dose ? String(g.dose) : '', doseUnit: g.doseUnit || 'mg', syringe: g.syringe, rstep: 0, guideName: g.name, savedName: g.name, saved: true, injected: 0, home: false, intro: false, ...patch });
   const ACT = {
     accept() { try { localStorage.setItem(NOTICE_KEY, '1'); } catch (e) {} set({ noticeAccepted: true }); },
@@ -314,7 +328,8 @@ ${name ? `<div style="font-size:18px;font-weight:700;color:#3d472b;margin-bottom
     next() { const m = model(); if (!m.valid[S.step]) return; const p = { step: S.step + 1, rstep: 0, injected: 0 }; if (S.step === 2 && m.rec && !S.custom) p.water = String(m.rec.ml); set(p); },
     syringe(a) { set({ syringe: a }); }, unit(a) { set({ doseUnit: a }); },
     openCustom() { const m = model(); set({ custom: true, water: m.matchesOpt ? '' : S.water }); },
-    useRec() { const m = model(); if (m.rec) set({ water: String(m.rec.ml), custom: false }); },
+    useRec() { const m = model(); if (m.rec) set({ water: String(m.rec.ml), custom: false, bigVial: false }); },
+    pickAlt(i) { const a = model().alts[+i]; if (a) set({ water: String(a.ml), custom: true, bigVial: a.big }); },
     editNumbers() { const m = model(); set({ step: 0, rstep: 0, home: false, injected: 0, pushing: false, custom: S.custom && !m.matchesOpt }); },
     rBack() { const m = model(); if (m.isTable && S.fromSaved) set({ step: 6 }); else set({ rstep: m.r - 1 }); },
     rNext() { const m = model(); const p = { rstep: m.r + 1 }; if (m.r === m.LAST && S.saved) { persist(S.guides.map(g => g.name === S.guideName ? { ...g, mg: m.mg, water: m.water, dose: m.dose, doseUnit: S.doseUnit, syringe: S.syringe } : g)); p.savedName = S.guideName; } set(p); },
