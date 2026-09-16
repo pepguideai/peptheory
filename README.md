@@ -1,6 +1,6 @@
 # peptheory.io (web)
 
-Static peptide reconstitution guide. No build step, no server, no analytics. Saved compounds live in the browser's localStorage.
+Static compound reconstitution guide. No build step, no server, no analytics. Saved compounds live in the browser's localStorage.
 
 ## Files
 - `index.html` — shell
